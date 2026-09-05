@@ -1,0 +1,89 @@
+version: "3.9"
+
+networks:
+  smart-library-net:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  model-data:
+
+services:
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: smart-library-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - model-data:/app/data
+    environment:
+      - AIRFLOW_ENV=production
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - smart-library-net
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: smart-library-dashboard
+    command: ["python", "-m", "streamlit", "run", "dashboard/app.py",
+              "--server.port=8501",
+              "--server.address=0.0.0.0",
+              "--server.headless=true"]
+    ports:
+      - "8501:8501"
+    volumes:
+      - model-data:/app/data
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - smart-library-net
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: smart-library-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+    networks:
+      - smart-library-net
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: smart-library-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana_dashboard.json:/etc/grafana/provisioning/dashboards/smart-library.json:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=smartlibrary2026
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    depends_on:
+      - prometheus
+    networks:
+      - smart-library-net
+    restart: unless-stopped
